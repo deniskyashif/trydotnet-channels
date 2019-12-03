@@ -22,21 +22,30 @@ public class Program
         {
             switch (session)
             {
-                case "run_generator": await RunGenerator(); break;
-                case "run_multiplexing": await RunMultiplexing(); break;
-                case "run_demultiplexing": await RunDemultiplexing(); break;
-                case "run_timeout": await RunTimeout(); break;
-                case "run_quit_channel": await RunQuitChannel(); break;
-                default: WriteLine("Unrecognized session"); break;
+                case "run_generator":
+                    await RunGenerator(); break;
+                case "run_multiplexing":
+                    await RunMultiplexing(); break;
+                case "run_demultiplexing":
+                    await RunDemultiplexing(); break;
+                case "run_timeout":
+                    await RunTimeout(); break;
+                case "run_quit_channel":
+                    await RunQuitChannel(); break;
+                default:
+                    WriteLine("Unrecognized session"); break;
             }
             return;
         }
 
         switch (region)
         {
-            case "run_basic_channel_usage": await RunBasicChannelUsage(); break;
-            case "web_search": await RunWebSearch(); break;
-            default: WriteLine("Unrecognized region"); break;
+            case "run_basic_channel_usage":
+                await RunBasicChannelUsage(); break;
+            case "web_search":
+                await RunWebSearch(); break;
+            default:
+                WriteLine("Unrecognized region"); break;
         }
     }
 
@@ -44,7 +53,6 @@ public class Program
     {
 #region run_basic_channel_usage
         var ch = Channel.CreateUnbounded<string>();
-        var rnd = new Random();
 
         var consumer = Task.Run(async () =>
         {
@@ -54,6 +62,7 @@ public class Program
 
         var producer = Task.Run(async () =>
         {
+            var rnd = new Random();
             for (int i = 0; i < 5; i++)
             {
                 await Task.Delay(TimeSpan.FromSeconds(rnd.Next(3)));
@@ -96,12 +105,12 @@ public class Program
         for (int i = 0; i < readers.Count; i++)
         {
             var reader = readers[i];
-            var k = i;
+            var index = i;
             tasks.Add(Task.Run(async () =>
             {
                 await foreach (var item in reader.ReadAllAsync())
                 {
-                    WriteLineWithTime(string.Format("Reader {0}: {1}", k, item));
+                    WriteLineWithTime(string.Format("Reader {0}: {1}", index, item));
                 }
             }));
         }
@@ -173,19 +182,19 @@ public class Program
         var rnd = new Random();
 
         Task.Run(async () =>
+        {
+            for (int i = 0; i < count; i++)
             {
-                for (int i = 0; i < count; i++)
+                if (token.IsCancellationRequested)
                 {
-                    if (token.IsCancellationRequested)
-                    {
-                        await ch.Writer.WriteAsync($"{msg} says bye!");
-                        break;
-                    }
-                    await ch.Writer.WriteAsync($"{msg} {i}");
-                    await Task.Delay(TimeSpan.FromSeconds(rnd.Next(0, 3)));
+                    await ch.Writer.WriteAsync($"{msg} says bye!");
+                    break;
                 }
-                ch.Writer.Complete();
-            });
+                await ch.Writer.WriteAsync($"{msg} {i}");
+                await Task.Delay(TimeSpan.FromSeconds(rnd.Next(0, 3)));
+            }
+            ch.Writer.Complete();
+        });
 
         return ch.Reader;
     }
