@@ -249,7 +249,6 @@ public class Program
     public static async Task RunWebSearch()
     {
 #region web_search
-        var term = "Jupyter";
         var ch = Channel.CreateUnbounded<string>();
 
         async Task Search(string source, string term, CancellationToken token)
@@ -258,7 +257,9 @@ public class Program
             await ch.Writer.WriteAsync($"Result from {source} for {term}", token);
         }
 
+        var term = "Jupyter";
         var token = new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token;
+
         var search1 = Search("Wikipedia", term, token);
         var search2 = Search("Quora", term, token);
         var search3 = Search("Everything2", term, token);

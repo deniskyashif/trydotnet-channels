@@ -2,6 +2,8 @@
 
 A channel is a data structure that allows one thread to communicate with another thread. By communicating, we mean sending and receiving data in a first in first out (FIFO) order. Currently, they are part of the `System.Threading.Channels` [NuGet package](https://www.nuget.org/packages/System.Threading.Channels/).
 
+<img src="http://localhost:1313/images/posts/2019-12-08-csharp-channels-part1/channel-sketch.png" width="600" />
+
 That's how we create a channel:
 
 ```csharp
