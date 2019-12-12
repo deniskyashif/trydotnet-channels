@@ -1,6 +1,10 @@
 # C# Concurrency Patterns with Channels
 
-This project contains interactive examples for implementing concurrent workflows in C# using channels. Check out this [blog post](https://deniskyashif.com/csharp-concurrency-patterns-using-channels/) for more details.
+<img src="https://deniskyashif.com/images/posts/2019-12-08-csharp-channels-part1/channel-sketch.png" width="450" />
+
+This project contains interactive examples for implementing concurrent workflows in C# using channels. Check my blog posts on the topic:  
+* [C# Channels - Publish / Subscribe Workflows](https://deniskyashif.com/csharp-concurrency-patterns-using-channels/)
+* [C# Channels - Timeout and Cancellation](https://deniskyashif.com/csharp-channels-part-2/)
 
 ## Table of contents
 
