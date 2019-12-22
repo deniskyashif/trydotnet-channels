@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
@@ -32,6 +34,8 @@ public class Program
                     await RunTimeout(); break;
                 case "run_quit_channel":
                     await RunQuitChannel(); break;
+                case "run_pipeline":
+                    await RunPipeline(); break;
                 default:
                     WriteLine("Unrecognized session"); break;
             }
@@ -224,10 +228,10 @@ public class Program
 #region split
     static IList<ChannelReader<T>> Split<T>(ChannelReader<T> ch, int n)
     {
-        var outputs = new List<Channel<T>>(n);
+        var outputs = new Channel<T>[n];
 
         for (int i = 0; i < n; i++)
-            outputs.Add(Channel.CreateUnbounded<T>());
+            outputs[i] = Channel.CreateUnbounded<T>();
 
         Task.Run(async () =>
         {
@@ -238,11 +242,11 @@ public class Program
                 index = (index + 1) % n;
             }
 
-            foreach (var chan in outputs)
-                chan.Writer.Complete();
+            foreach (var ch in outputs)
+                ch.Writer.Complete();
         });
 
-        return outputs.Select(c => c.Reader).ToList();
+        return outputs.Select(ch => ch.Reader).ToArray();
     }
 #endregion
 
@@ -280,4 +284,154 @@ public class Program
         ch.Writer.Complete();
 #endregion
     }
+
+    public static async Task RunPipeline()
+    {
+#region run_pipeline
+        var sw = new Stopwatch();
+        sw.Start();
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        // Try with a large folder e.g. node_modules
+        var fileSource = GetFilesRecursively(".", cts.Token);
+        var sourceCodeFiles = FilterByExtension(
+            fileSource, new HashSet<string> { ".cs", ".json", ".xml" });
+        var (counter, errors) = GetLineCount(sourceCodeFiles);
+        
+        // var (counter, errors) = CountLinesAndMerge(Split(sourceCodeFiles, 5));
+
+        var totalLines = 0;
+        await foreach (var item in counter.ReadAllAsync())
+        {
+            WriteLineWithTime($"{item.file.FullName} {item.lines}");
+            totalLines += item.lines;
+        }
+
+        Console.WriteLine($"Total lines: {totalLines}");
+
+        await foreach (var errMessage in errors.ReadAllAsync())
+            WriteLine(errMessage);
+
+        sw.Stop();
+        Console.WriteLine(sw.Elapsed);
+#endregion
+    }
+
+#region get_files_recursively
+    static ChannelReader<string> GetFilesRecursively(string root, CancellationToken token = default)
+    {
+        var output = Channel.CreateUnbounded<string>();
+
+        void WalkDir(string path)
+        {
+            if (token.IsCancellationRequested)
+                throw new OperationCanceledException();
+            
+            foreach (var file in Directory.GetFiles(path))
+                output.Writer.WriteAsync(file, token);
+            foreach (var dir in Directory.GetDirectories(path))
+                WalkDir(dir);
+        }
+
+        Task.Run(() =>
+        {
+            try
+            {
+                WalkDir(root);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("Cancelled.");
+            }
+            finally { output.Writer.Complete(); }
+        });
+
+        return output;
+    }
+#endregion
+#region filter_by_extension
+    static ChannelReader<FileInfo> FilterByExtension(
+        ChannelReader<string> input, HashSet<string> exts)
+    {
+        var output = Channel.CreateUnbounded<FileInfo>();
+        Task.Run(async () =>
+        {
+            await foreach (var file in input.ReadAllAsync())
+            {
+                var fileInfo = new FileInfo(file);
+                if (exts.Contains(fileInfo.Extension))
+                    await output.Writer.WriteAsync(fileInfo);
+            }
+
+            output.Writer.Complete();
+        });
+
+        return output;
+    }
+#endregion
+#region get_line_count
+    static (ChannelReader<(FileInfo file, int lines)> output, ChannelReader<string> errors) 
+        GetLineCount(ChannelReader<FileInfo> input)
+    {
+        var output = Channel.CreateUnbounded<(FileInfo, int)>();
+        var errors = Channel.CreateUnbounded<string>();
+
+        Task.Run(async () =>
+        {
+            await foreach (var file in input.ReadAllAsync())
+            {
+                var lines = CountLines(file);
+                if (lines == 0)
+                    await errors.Writer.WriteAsync($"[Error] Empty file {file}");
+                else
+                    await output.Writer.WriteAsync((file, lines));
+            }
+            output.Writer.Complete();
+            errors.Writer.Complete();
+        });
+
+        return (output, errors);
+    }
+#endregion
+#region count_lines
+    private static int CountLines(FileInfo file)
+    {
+        using var sr = new StreamReader(file.FullName);
+        var lines = 0;
+        
+        while (sr.ReadLine() != null)
+            lines++;
+
+        return lines;
+    }
+#endregion
+#region count_lines_and_merge
+    static (ChannelReader<(FileInfo file, int lines)> output, ChannelReader<string> errors)
+    	CountLinesAndMerge(IList<ChannelReader<FileInfo>> inputs)
+    {
+        var output = Channel.CreateUnbounded<(FileInfo file, int lines)>();
+        var errors = Channel.CreateUnbounded<string>();
+
+        Task.Run(async () =>
+        {
+            async Task Redirect(ChannelReader<FileInfo> input)
+            {
+                await foreach (var file in input.ReadAllAsync())
+                {
+                    var lines = CountLines(file);
+                    if (lines == 0)
+                        await errors.Writer.WriteAsync($"[Error] Empty file {file}");
+                    else
+                        await output.Writer.WriteAsync((file, lines));
+                }
+            }
+        
+            await Task.WhenAll(inputs.Select(Redirect).ToArray());
+            output.Writer.Complete();
+            errors.Writer.Complete();
+        });
+
+        return (output, errors);
+    }
+#endregion
 }

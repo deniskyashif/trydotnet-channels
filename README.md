@@ -3,8 +3,9 @@
 <img src="https://deniskyashif.com/images/posts/2019-12-08-csharp-channels-part1/channel-sketch.png" width="450" />
 
 This project contains interactive examples for implementing concurrent workflows in C# using channels. Check my blog posts on the topic:  
-* [C# Channels - Publish / Subscribe Workflows](https://deniskyashif.com/csharp-concurrency-patterns-using-channels/)
+* [C# Channels - Publish / Subscribe Workflows](https://deniskyashif.com/csharp-channels-part-1/)
 * [C# Channels - Timeout and Cancellation](https://deniskyashif.com/csharp-channels-part-2/)
+* [C# Channels - Async Data Pipelines](https://deniskyashif.com/csharp-channels-part-3/)
 
 ## Table of contents
 
@@ -15,6 +16,7 @@ This project contains interactive examples for implementing concurrent workflows
 - [Timeout](Timeout.md)
 - [Quit Channel](QuitChannel.md)
 - [Web Search](WebSearch.md)
+- [Pipelines](Pipelines.md)
 
 ## How to run it
 

@@ -6,4 +6,4 @@ We're given the task to query several data sources and mix the results. The quer
 ```
 Depending on the timeout interval we might end up receiving responses for all of the queries, or cut off the ones that are too slow.
 
-#### Next: [Home &raquo;](../Readme.md) Previous: [Quit Channel &laquo;](../QuitChannel.md) 
+#### Next: [Pipelines &raquo;](../Pipelines.md) Previous: [Quit Channel &laquo;](../QuitChannel.md) 
