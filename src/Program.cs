@@ -290,14 +290,14 @@ public class Program
 #region run_pipeline
         var sw = new Stopwatch();
         sw.Start();
-        var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
         // Try with a large folder e.g. node_modules
         var fileSource = GetFilesRecursively(".", cts.Token);
         var sourceCodeFiles = FilterByExtension(
             fileSource, new HashSet<string> { ".cs", ".json", ".xml" });
         var (counter, errors) = GetLineCount(sourceCodeFiles);
-        
+        // Distribute the file reading stage amongst several workers
         // var (counter, errors) = CountLinesAndMerge(Split(sourceCodeFiles, 5));
 
         var totalLines = 0;
@@ -306,14 +306,13 @@ public class Program
             WriteLineWithTime($"{item.file.FullName} {item.lines}");
             totalLines += item.lines;
         }
-
-        Console.WriteLine($"Total lines: {totalLines}");
+        WriteLine($"Total lines: {totalLines}");
 
         await foreach (var errMessage in errors.ReadAllAsync())
             WriteLine(errMessage);
 
         sw.Stop();
-        Console.WriteLine(sw.Elapsed);
+        WriteLine(sw.Elapsed);
 #endregion
     }
 
@@ -339,10 +338,7 @@ public class Program
             {
                 WalkDir(root);
             }
-            catch (OperationCanceledException)
-            {
-                Console.WriteLine("Cancelled.");
-            }
+            catch (OperationCanceledException) { WriteLine("Cancelled."); }
             finally { output.Writer.Complete(); }
         });
 
@@ -394,7 +390,7 @@ public class Program
     }
 #endregion
 #region count_lines
-    private static int CountLines(FileInfo file)
+    static int CountLines(FileInfo file)
     {
         using var sr = new StreamReader(file.FullName);
         var lines = 0;
