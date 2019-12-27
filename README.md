@@ -1,5 +1,7 @@
 # C# Concurrency Patterns with Channels
 
+[![Build Status](https://github.com/deniskyashif/trydotnet-channels/workflows/.NET%20Core/badge.svg)](https://github.com/deniskyashif/trydotnet-channels/actions?query=workflow%3A%22.NET+Core%22)
+
 <img src="https://deniskyashif.com/images/posts/2019-12-08-csharp-channels-part1/channel-sketch.png" width="450" />
 
 This project contains interactive examples for implementing concurrent workflows in C# using channels. Check my blog posts on the topic:  
