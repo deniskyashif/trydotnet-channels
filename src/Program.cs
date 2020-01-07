@@ -321,22 +321,23 @@ public class Program
     {
         var output = Channel.CreateUnbounded<string>();
 
-        void WalkDir(string path)
+        async Task WalkDir(string path)
         {
             if (token.IsCancellationRequested)
                 throw new OperationCanceledException();
             
             foreach (var file in Directory.GetFiles(path))
-                output.Writer.WriteAsync(file, token);
-            foreach (var dir in Directory.GetDirectories(path))
-                WalkDir(dir);
+                await output.Writer.WriteAsync(file, token);
+
+            var tasks = Directory.GetDirectories(path).Select(WalkDir);
+            await Task.WhenAll(tasks.ToArray());
         }
 
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             try
             {
-                WalkDir(root);
+                await WalkDir(root);
             }
             catch (OperationCanceledException) { WriteLine("Cancelled."); }
             finally { output.Writer.Complete(); }
