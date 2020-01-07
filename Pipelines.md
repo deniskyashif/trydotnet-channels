@@ -1,8 +1,8 @@
 ## Pipelines
 
-A pipeline is a concurrency model which consists of a sequence of stages. Each stage performs a part of the full job and when it's done, it forwards it to the next stage. It also runs in its own thread and **shares no state** with the other stages.
+A pipeline is a concurrency model which consists of a sequence of stages. Each stage performs a part of the full job and when it's done, it forwards it to the next stage. It also runs concurrently and **shares no state** with the other stages.
 
-<img src="https://deniskyashif.com/images/posts/csharp-channels-part3/pipeline-channels.png" />
+<img src="https://deniskyashif.com/images/posts/2020-01-07-csharp-channels-part3/pipeline-channels.png" />
 
 ### Generator
 
@@ -39,11 +39,11 @@ Now we've implemented the stages of our pipeline, we are ready to put them all t
 ``` cs --region run_pipeline --source-file ./src/Program.cs --project ./src/TryChannelsDemo.csproj --session run_pipeline
 ```
 
-## Dealing with Bottlenecks
+## Dealing with Backpressure
 
-<img src="https://deniskyashif.com/images/posts/csharp-channels-part3/bottleneck.png" />
+In the line counter example, the stage where we read the file and count its lines might cause backpressure when a file is sufficiently large. It makes sense to increase the capacity of this stage and that's where `Merge<T>` and `Split<T>` which we discussed as [Multiplexer](/Multiplexer.md) and [Demultiplexer](/Demultiplexer.md) come into use.
 
-In the line counter example, the stage where we read the file and count its lines might cause a bottleneck when a file is sufficiently large. It makes sense to increase the capacity of this stage and that's where `Merge<T>` and `Split<T>` which we discussed as [Multiplexer](/Multiplexer.md) and [Demultiplexer](/Demultiplexer.md) come into use.
+<img src="https://deniskyashif.com/images/posts/2020-01-07-csharp-channels-part3/bottleneck.png" />
 
 We're use `Split<T>` to distribute the source code files among 5 channels which will let us process up to 5 files simultaneously.
 
