@@ -7,7 +7,7 @@ We have two channels, want to read from both and process whichever's message arr
 
 `Merge<T>()` takes two channels and starts reading from them simultaneously. It creates and immediately returns a new channel which consolidates the outputs from the input channels. The reading procedures are run asynchronously on separate threads. Think of it like this:
 
-<img src="http://localhost:1313/images/posts/2019-12-08-csharp-channels-part1/merge-sketch.png" width="600" />
+<img src="https://deniskyashif.com/images/posts/2019-12-08-csharp-channels-part1/merge-sketch.png" width="600" />
 
 `Merge<T>()` also works with an arbitrary number of inputs.  
 We've created the local asynchronous `Redirect()` function which takes a channel as an input writes its messages to the consolidated output. It returns a `Task` so we can use `WhenAll()` to wait for the input channels to complete. This allows us to also capture potential exceptions. In the end, we know that there's nothing left to be read, so we can safely close the writer.

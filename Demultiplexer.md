@@ -2,7 +2,7 @@
 
 We want to distribute the work amongst several consumers. Let's define `Split<T>()`:
 
-<img src="http://localhost:1313/images/posts/2019-12-08-csharp-channels-part1/split-sketch.png" width="600" />
+<img src="https://deniskyashif.com/images/posts/2019-12-08-csharp-channels-part1/split-sketch.png" width="600" />
 
 ``` cs --region split --source-file ./src/Program.cs --project ./src/TryChannelsDemo.csproj --session run_demultiplexing
 ```
