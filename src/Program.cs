@@ -1,434 +1,512 @@
-using System;
-using System.IO;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
-using static System.Console;
+#nullable enable
 
-public class Program
-{
-    static Action<string> WriteLineWithTime =
-        (str) => WriteLine($"[{DateTime.UtcNow.ToLongTimeString()}] {str}");
+namespace TryChannelsDemo {
 
-    static async Task Main(
-        string region = null,
-        string session = null,
-        string package = null,
-        string project = null,
-        string[] args = null)
-    {
-        if (!string.IsNullOrWhiteSpace(session))
-        {
-            switch (session)
-            {
-                case "run_generator":
-                    await RunGenerator(); break;
-                case "run_multiplexing":
-                    await RunMultiplexing(); break;
-                case "run_demultiplexing":
-                    await RunDemultiplexing(); break;
-                case "run_timeout":
-                    await RunTimeout(); break;
-                case "run_quit_channel":
-                    await RunQuitChannel(); break;
-                case "run_pipeline":
-                    await RunPipeline(); break;
-                default:
-                    WriteLine("Unrecognized session"); break;
-            }
-            return;
-        }
+	using System;
+	using System.Collections.Generic;
+	using System.Diagnostics;
+	using System.IO;
+	using System.Linq;
+	using System.Text;
+	using System.Threading;
+	using System.Threading.Channels;
+	using System.Threading.Tasks;
+	using static System.Console;
 
-        switch (region)
-        {
-            case "run_basic_channel_usage":
-                await RunBasicChannelUsage(); break;
-            case "web_search":
-                await RunWebSearch(); break;
-            default:
-                WriteLine("Unrecognized region"); break;
-        }
-    }
+	public class Program {
 
-    public static async Task RunBasicChannelUsage()
-    {
-#region run_basic_channel_usage
-        var ch = Channel.CreateUnbounded<string>();
+		/// <summary>
+		///     Returns the count of lines read from <paramref name="file" /> until the end of file, or until
+		///     <paramref name="cancellationToken" /> has been cancelled.
+		/// </summary>
+		/// <param name="file"></param>
+		/// <param name="cancellationToken"></param>
+		/// <returns></returns>
+		private static async Task<Int32> CountLines( FileSystemInfo file, CancellationToken cancellationToken ) {
+			var lines = 0;
 
-        var consumer = Task.Run(async () =>
-        {
-            while (await ch.Reader.WaitToReadAsync())
-                WriteLineWithTime(await ch.Reader.ReadAsync());                
-        });
+			file.Refresh();
 
-        var producer = Task.Run(async () =>
-        {
-            var rnd = new Random();
-            for (int i = 0; i < 5; i++)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(rnd.Next(3)));
-                await ch.Writer.WriteAsync($"Message {i}");
-            }
-            ch.Writer.Complete();
-        });
+			if ( file.Exists ) {
+				using var sr = new StreamReader( file.FullName );
 
-        await Task.WhenAll(consumer, producer);
-#endregion
-    }
+				while ( await sr.ReadLineAsync().ConfigureAwait( false ) != null ) {
+					lines++;
+					if ( cancellationToken.IsCancellationRequested ) {
+						break;
+					}
+				}
+			}
 
-    public static async Task RunGenerator()
-    {
-#region run_generator
-        var joe = CreateMessenger("Joe", 5);
-        
-        await foreach (var item in joe.ReadAllAsync())
-            WriteLineWithTime(item);
-#endregion
-    }
+			return lines;
+		}
 
-    public static async Task RunMultiplexing()
-    {
-#region run_multiplexing
-        var ch = Merge(CreateMessenger("Joe", 3), CreateMessenger("Ann", 5));
+		private static async Task<(ChannelReader<(FileInfo file, Int32 lines)> output, ChannelReader<String> errors)> CountLinesAndMerge(
+			IEnumerable<ChannelReader<FileInfo>> inputs,
+			CancellationToken cancellationToken
+		) {
+			var output = Channel.CreateUnbounded<(FileInfo file, Int32 lines)>();
+			var errors = Channel.CreateUnbounded<String>();
 
-        await foreach (var item in ch.ReadAllAsync())
-            WriteLineWithTime(item);
-#endregion
-    }
+			async Task Redirect( ChannelReader<FileInfo> input ) {
+				await foreach ( var file in input.ReadAllAsync( cancellationToken ) ) {
+					var lines = await CountLines( file, cancellationToken ).ConfigureAwait( false );
+					if ( lines == 0 ) {
+						await errors.Writer.WriteAsync( $"[Error] Empty file {file}", cancellationToken ).ConfigureAwait( false );
+					}
+					else {
+						await output.Writer.WriteAsync( (file, lines), cancellationToken ).ConfigureAwait( false );
+					}
+				}
+			}
 
-    public static async Task RunDemultiplexing()
-    {
-#region run_demultiplexing
-        var joe = CreateMessenger("Joe", 10);
-        var readers = Split(joe, 3);
-        var tasks = new List<Task>();
+			await Task.WhenAll( inputs.Select( Redirect ).ToArray() ).ConfigureAwait( false );
+			output.Writer.Complete();
+			errors.Writer.Complete();
 
-        for (int i = 0; i < readers.Count; i++)
-        {
-            var reader = readers[i];
-            var index = i;
-            tasks.Add(Task.Run(async () =>
-            {
-                await foreach (var item in reader.ReadAllAsync())
-                {
-                    WriteLineWithTime(string.Format("Reader {0}: {1}", index, item));
-                }
-            }));
-        }
+			return (output, errors);
+		}
 
-        await Task.WhenAll(tasks);
-#endregion
-    }
+		private static async Task<ChannelReader<String>> CreateMessenger( String msg, Int32 count ) {
+			var ch = Channel.CreateUnbounded<String>();
 
-    public static async Task RunTimeout()
-    {
-#region run_timeout
-        var joe = CreateMessenger("Joe", 10);
-        var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
+			for ( var i = 0; i < count; i++ ) {
+				await ch.Writer.WriteAsync( $"{msg} {i}" ).ConfigureAwait( false );
+				await Task.Delay( TimeSpan.FromSeconds( Randem.Instance().Next( 3 ) ) ).ConfigureAwait( false );
+			}
 
-        try
-        {
-            await foreach (var item in joe.ReadAllAsync(cts.Token))
-                Console.WriteLine(item);
+			ch.Writer.Complete();
 
-            Console.WriteLine("Joe sent all of his messages."); 
-        }
-        catch (OperationCanceledException)
-        {
-            Console.WriteLine("Joe, you are too slow!");
-        }
-#endregion
-    }
+			return ch.Reader;
+		}
 
-    public static async Task RunQuitChannel()
-    {
-#region run_quit_channel
-        var cts = new CancellationTokenSource();
-        var joe = CreateMessenger("Joe", 10, cts.Token);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
+		private static async Task<ChannelReader<String>> CreateMessenger( String msg, Int32? count, CancellationToken token ) {
+			count ??= 5;
 
-        await foreach (var item in joe.ReadAllAsync())
-            WriteLineWithTime(item);
-#endregion
-    }
+			var ch = Channel.CreateUnbounded<String>();
 
-#region generator
-    static ChannelReader<string> CreateMessenger(string msg, int count)
-    {
-        var ch = Channel.CreateUnbounded<string>();
-        var rnd = new Random();
+			for ( var i = 0; i < count; i++ ) {
+				if ( token.IsCancellationRequested ) {
+					await ch.Writer.WriteAsync( $"{msg} says bye!", token ).ConfigureAwait( false );
+					break;
+				}
 
-        Task.Run(async () =>
-        {
-            for (int i = 0; i < count; i++)
-            {
-                await ch.Writer.WriteAsync($"{msg} {i}");
-                await Task.Delay(TimeSpan.FromSeconds(rnd.Next(3)));
-            }
-            ch.Writer.Complete();
-        });
+				await ch.Writer.WriteAsync( $"{msg} {i}", token ).ConfigureAwait( false );
+				await Task.Delay( TimeSpan.FromSeconds( Randem.Instance().Next( 0, 3 ) ), token ).ConfigureAwait( false );
+			}
 
-        return ch.Reader;
-    }
-#endregion
+			ch.Writer.Complete();
 
-#region generator_with_cancellation
-    static ChannelReader<string> CreateMessenger(
-        string msg,
-        int count = 5,
-        CancellationToken token = default(CancellationToken))
-    {
-        var ch = Channel.CreateUnbounded<string>();
-        var rnd = new Random();
+			return ch.Reader;
+		}
 
-        Task.Run(async () =>
-        {
-            for (int i = 0; i < count; i++)
-            {
-                if (token.IsCancellationRequested)
-                {
-                    await ch.Writer.WriteAsync($"{msg} says bye!");
-                    break;
-                }
-                await ch.Writer.WriteAsync($"{msg} {i}");
-                await Task.Delay(TimeSpan.FromSeconds(rnd.Next(0, 3)));
-            }
-            ch.Writer.Complete();
-        });
+		private static async Task<ChannelReader<FileInfo>> FilterByExtensionAsync( ChannelReader<String> input, IReadOnlySet<String> exts ) {
+			var output = Channel.CreateUnbounded<FileInfo>();
 
-        return ch.Reader;
-    }
-#endregion
-    
-#region merge
-    static ChannelReader<T> Merge<T>(params ChannelReader<T>[] inputs)
-    {
-        var output = Channel.CreateUnbounded<T>();
+			await foreach ( var file in input.ReadAllAsync() ) {
+				var fileInfo = new FileInfo( file );
+				if ( exts.Contains( fileInfo.Extension ) ) {
+					await output.Writer.WriteAsync( fileInfo ).ConfigureAwait( false );
+				}
+			}
 
-        Task.Run(async () =>
-        {
-            async Task Redirect(ChannelReader<T> input)
-            {
-                await foreach (var item in input.ReadAllAsync())
-                    await output.Writer.WriteAsync(item);
-            }
-            
-            await Task.WhenAll(inputs.Select(i => Redirect(i)).ToArray());
-            output.Writer.Complete();
-        });
+			output.Writer.Complete();
 
-        return output;
-    }
-#endregion
+			return output;
+		}
 
-#region split
-    static IList<ChannelReader<T>> Split<T>(ChannelReader<T> ch, int n)
-    {
-        var outputs = new Channel<T>[n];
+		private static async Task<ChannelReader<String>> GetFilesRecursivelyAsync( String root, CancellationToken token ) {
+			var output = Channel.CreateUnbounded<String>();
 
-        for (int i = 0; i < n; i++)
-            outputs[i] = Channel.CreateUnbounded<T>();
+			async Task WalkDir( String path ) {
+				if ( token.IsCancellationRequested ) {
+					throw new OperationCanceledException();
+				}
 
-        Task.Run(async () =>
-        {
-            var index = 0;
-            await foreach (var item in ch.ReadAllAsync())
-            {
-                await outputs[index].Writer.WriteAsync(item);
-                index = (index + 1) % n;
-            }
+				foreach ( var file in Directory.EnumerateFiles( path ) ) {
+					await output.Writer.WriteAsync( file, token ).ConfigureAwait( false );
+				}
 
-            foreach (var ch in outputs)
-                ch.Writer.Complete();
-        });
+				var tasks = Directory.EnumerateDirectories( path ).Select( WalkDir );
+				await Task.WhenAll( tasks.ToArray() ).ConfigureAwait( false );
+			}
 
-        return outputs.Select(ch => ch.Reader).ToArray();
-    }
-#endregion
+			try {
+				await WalkDir( root ).ConfigureAwait( false );
+			}
+			catch ( OperationCanceledException ) {
+				WriteLine( "Cancelled." );
+			}
+			finally {
+				output.Writer.Complete();
+			}
 
-    public static async Task RunWebSearch()
-    {
-#region web_search
-        var ch = Channel.CreateUnbounded<string>();
+			return output;
+		}
 
-        async Task Search(string source, string term, CancellationToken token)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(new Random().Next(5)), token);
-            await ch.Writer.WriteAsync($"Result from {source} for {term}", token);
-        }
+		private static async Task<(ChannelReader<(FileInfo file, Int32 lines)> output, ChannelReader<String> errors)> GetLineCountAsync(
+			ChannelReader<FileInfo> input,
+			CancellationToken cancellationToken
+		) {
+			var output = Channel.CreateUnbounded<(FileInfo, Int32)>();
+			var errors = Channel.CreateUnbounded<String>();
 
-        var term = "Jupyter";
-        var token = new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token;
+			await foreach ( var file in input.ReadAllAsync( cancellationToken ) ) {
+				var lines = await CountLines( file, cancellationToken ).ConfigureAwait( false );
+				if ( lines == 0 ) {
+					await errors.Writer.WriteAsync( $"[Error] Empty file {file}", cancellationToken ).ConfigureAwait( false );
+				}
+				else {
+					await output.Writer.WriteAsync( (file, lines), cancellationToken ).ConfigureAwait( false );
+				}
+			}
 
-        var search1 = Search("Wikipedia", term, token);
-        var search2 = Search("Quora", term, token);
-        var search3 = Search("Everything2", term, token);
+			output.Writer.Complete();
+			errors.Writer.Complete();
 
-        try
-        {
-            for (int i = 0; i < 3; i++)
-            {
-                Console.WriteLine(await ch.Reader.ReadAsync(token));
-            }
-            Console.WriteLine("All searches have completed.");
-        }
-        catch (OperationCanceledException)
-        {
-            Console.WriteLine("Timeout.");
-        }
+			return (output, errors);
+		}
 
-        ch.Writer.Complete();
-#endregion
-    }
+		private static async Task<ChannelReader<T>> Merge<T>( params ChannelReader<T>[] inputs ) {
+			var output = Channel.CreateUnbounded<T>();
 
-    public static async Task RunPipeline()
-    {
-#region run_pipeline
-        var sw = new Stopwatch();
-        sw.Start();
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+			async Task Redirect( ChannelReader<T> input ) {
+				await foreach ( var item in input.ReadAllAsync() ) {
+					await output.Writer.WriteAsync( item ).ConfigureAwait( false );
+				}
+			}
 
-        // Try with a large folder e.g. node_modules
-        var fileSource = GetFilesRecursively(".", cts.Token);
-        var sourceCodeFiles = FilterByExtension(
-            fileSource, new HashSet<string> { ".cs", ".json", ".xml" });
-        var (counter, errors) = GetLineCount(sourceCodeFiles);
-        // Distribute the file reading stage amongst several workers
-        // var (counter, errors) = CountLinesAndMerge(Split(sourceCodeFiles, 5));
+			await Task.WhenAll( inputs.Select( Redirect ).ToArray() ).ConfigureAwait( false );
+			output.Writer.Complete();
 
-        var totalLines = 0;
-        await foreach (var item in counter.ReadAllAsync())
-        {
-            WriteLineWithTime($"{item.file.FullName} {item.lines}");
-            totalLines += item.lines;
-        }
-        WriteLine($"Total lines: {totalLines}");
+			return output;
+		}
 
-        await foreach (var errMessage in errors.ReadAllAsync())
-            WriteLine(errMessage);
+		private static async Task<IList<ChannelReader<T>>> Split<T>( ChannelReader<T> channelReader, Int32 n ) {
+			var outputs = new Channel<T>[n];
 
-        sw.Stop();
-        WriteLine(sw.Elapsed);
-#endregion
-    }
+			for ( var i = 0; i < n; i++ ) {
+				outputs[i] = Channel.CreateUnbounded<T>();
+			}
 
-#region get_files_recursively
-    static ChannelReader<string> GetFilesRecursively(string root, CancellationToken token = default)
-    {
-        var output = Channel.CreateUnbounded<string>();
+			var index = 0;
+			await foreach ( var item in channelReader.ReadAllAsync() ) {
+				await outputs[index].Writer.WriteAsync( item ).ConfigureAwait( false );
+				index = ( index + 1 ) % n;
+			}
 
-        async Task WalkDir(string path)
-        {
-            if (token.IsCancellationRequested)
-                throw new OperationCanceledException();
-            
-            foreach (var file in Directory.GetFiles(path))
-                await output.Writer.WriteAsync(file, token);
+			foreach ( var channel in outputs ) {
+				channel.Writer.Complete();
+			}
 
-            var tasks = Directory.GetDirectories(path).Select(WalkDir);
-            await Task.WhenAll(tasks.ToArray());
-        }
+			return outputs.Select( ch => ch.Reader ).ToArray();
+		}
 
-        Task.Run(async () =>
-        {
-            try
-            {
-                await WalkDir(root);
-            }
-            catch (OperationCanceledException) { WriteLine("Cancelled."); }
-            finally { output.Writer.Complete(); }
-        });
+		private static void WriteLineWithTime( String s ) => WriteLine( $"[{DateTime.UtcNow.ToLongTimeString()}] {s}" );
 
-        return output;
-    }
-#endregion
-#region filter_by_extension
-    static ChannelReader<FileInfo> FilterByExtension(
-        ChannelReader<string> input, HashSet<string> exts)
-    {
-        var output = Channel.CreateUnbounded<FileInfo>();
-        Task.Run(async () =>
-        {
-            await foreach (var file in input.ReadAllAsync())
-            {
-                var fileInfo = new FileInfo(file);
-                if (exts.Contains(fileInfo.Extension))
-                    await output.Writer.WriteAsync(fileInfo);
-            }
+		public static async Task Main( String[] args ) {
+			var choice = Randem.Instance().Next( 8 );
+			switch ( choice ) {
+				case 0:
+					await Runner( null, "run_pipeline" ).ConfigureAwait( false );
+					break;
+				case 1:
+					await Runner( null, "run_generator" ).ConfigureAwait( false );
+					break;
+				case 2:
+					await Runner( null, "run_multiplexing" ).ConfigureAwait( false );
+					break;
+				case 3:
+					await Runner( null, "run_demultiplexing" ).ConfigureAwait( false );
+					break;
+				case 4:
+					await Runner( null, "run_timeout" ).ConfigureAwait( false );
+					break;
+				case 5:
+					await Runner( null, "run_quit_channel" ).ConfigureAwait( false );
+					break;
+				case 6:
+					await Runner( "run_basic_channel_usage" ).ConfigureAwait( false );
+					break;
+				case 7:
+					await Runner( "web_search" ).ConfigureAwait( false );
+					break;
+			}
+		}
 
-            output.Writer.Complete();
-        });
+		public static async Task RunBasicChannelUsage() {
+			var ch = Channel.CreateUnbounded<String>();
 
-        return output;
-    }
-#endregion
-#region get_line_count
-    static (ChannelReader<(FileInfo file, int lines)> output, ChannelReader<string> errors) 
-        GetLineCount(ChannelReader<FileInfo> input)
-    {
-        var output = Channel.CreateUnbounded<(FileInfo, int)>();
-        var errors = Channel.CreateUnbounded<string>();
+			async Task func_consumer() {
+				while ( await ch.Reader.WaitToReadAsync().ConfigureAwait( false ) ) {
+					WriteLineWithTime( await ch.Reader.ReadAsync().ConfigureAwait( false ) );
+				}
+			}
 
-        Task.Run(async () =>
-        {
-            await foreach (var file in input.ReadAllAsync())
-            {
-                var lines = CountLines(file);
-                if (lines == 0)
-                    await errors.Writer.WriteAsync($"[Error] Empty file {file}");
-                else
-                    await output.Writer.WriteAsync((file, lines));
-            }
-            output.Writer.Complete();
-            errors.Writer.Complete();
-        });
+			async Task func_producer() {
+				for ( var i = 0; i < 5; i++ ) {
+					await Task.Delay( TimeSpan.FromSeconds( Randem.Instance().Next( 3 ) ) ).ConfigureAwait( false );
+					await ch.Writer.WriteAsync( $"Message {i}" ).ConfigureAwait( false );
+				}
 
-        return (output, errors);
-    }
-#endregion
-#region count_lines
-    static int CountLines(FileInfo file)
-    {
-        using var sr = new StreamReader(file.FullName);
-        var lines = 0;
-        
-        while (sr.ReadLine() != null)
-            lines++;
+				ch.Writer.Complete();
+			}
 
-        return lines;
-    }
-#endregion
-#region count_lines_and_merge
-    static (ChannelReader<(FileInfo file, int lines)> output, ChannelReader<string> errors)
-    	CountLinesAndMerge(IList<ChannelReader<FileInfo>> inputs)
-    {
-        var output = Channel.CreateUnbounded<(FileInfo file, int lines)>();
-        var errors = Channel.CreateUnbounded<string>();
+			await Task.WhenAll( func_consumer(), func_producer() ).ConfigureAwait( false );
+		}
 
-        Task.Run(async () =>
-        {
-            async Task Redirect(ChannelReader<FileInfo> input)
-            {
-                await foreach (var file in input.ReadAllAsync())
-                {
-                    var lines = CountLines(file);
-                    if (lines == 0)
-                        await errors.Writer.WriteAsync($"[Error] Empty file {file}");
-                    else
-                        await output.Writer.WriteAsync((file, lines));
-                }
-            }
-        
-            await Task.WhenAll(inputs.Select(Redirect).ToArray());
-            output.Writer.Complete();
-            errors.Writer.Complete();
-        });
+		public static async Task RunDemultiplexing() {
+			var joe = await CreateMessenger( "Joe", 10 ).ConfigureAwait( false );
+			var readers = Split( joe, 3 );
+			var tasks = new List<Task>();
 
-        return (output, errors);
-    }
-#endregion
+			for ( var i = 0; i < ( await readers.ConfigureAwait( false ) ).Count; i++ ) {
+				var reader = ( await readers.ConfigureAwait( false ) )[i];
+				var index = i;
+				tasks.Add( Task.Run( async () => {
+					await foreach ( var item in reader.ReadAllAsync() ) {
+						WriteLineWithTime( $"Reader {index}: {item}" );
+					}
+				} ) );
+			}
+
+			await Task.WhenAll( tasks ).ConfigureAwait( false );
+		}
+
+		public static async Task RunGenerator( CancellationToken cancellationToken ) {
+			var joe = await CreateMessenger( "Joe", 5 ).ConfigureAwait( false );
+
+			await foreach ( var item in joe.ReadAllAsync( cancellationToken ) ) {
+				WriteLineWithTime( item );
+			}
+		}
+
+		public static async Task RunMultiplexing( CancellationToken cancellationToken ) {
+			var ch = await Merge( await CreateMessenger( "Joe", 3 ).ConfigureAwait( false ), await CreateMessenger( "Ann", 5 ).ConfigureAwait( false ) ).ConfigureAwait( false );
+
+			await foreach ( var item in ch.ReadAllAsync( cancellationToken ) ) {
+				WriteLineWithTime( item );
+			}
+		}
+
+		public static async Task Runner( String? region = null, String? session = null, String? package = null, String? project = null, String[]? args = null ) {
+			var cancellationTokenSource = new CancellationTokenSource( TimeSpan.FromMinutes( 1 ) );
+			var cancellationToken = cancellationTokenSource.Token;
+
+			if ( !String.IsNullOrWhiteSpace( session ) ) {
+				switch ( session ) {
+					case "run_generator": {
+							await RunGenerator( cancellationToken ).ConfigureAwait( false );
+							break;
+						}
+					case "run_multiplexing": {
+							await RunMultiplexing( cancellationToken ).ConfigureAwait( false );
+							break;
+						}
+					case "run_demultiplexing": {
+							await RunDemultiplexing().ConfigureAwait( false );
+							break;
+						}
+					case "run_timeout": {
+							await RunTimeout().ConfigureAwait( false );
+							break;
+						}
+					case "run_quit_channel": {
+							await RunQuitChannel().ConfigureAwait( false );
+							break;
+						}
+					case "run_pipeline": {
+							var cts = new CancellationTokenSource( TimeSpan.FromSeconds( 5 ) );
+							await RunPipeline( cts.Token ).ConfigureAwait( false );
+							break;
+						}
+					default: {
+							WriteLine( "Unrecognized session" );
+							break;
+						}
+				}
+			}
+			else {
+				switch ( region ) {
+					case "run_basic_channel_usage":
+						await RunBasicChannelUsage().ConfigureAwait( false );
+						break;
+
+					case "web_search":
+						await RunWebSearch().ConfigureAwait( false );
+						break;
+
+					default:
+						WriteLine( "Unrecognized region" );
+						break;
+				}
+			}
+		}
+
+		public static async Task RunPipeline( CancellationToken cancellationToken ) {
+			var sw = new Stopwatch();
+			sw.Start();
+
+			// Try with a large folder e.g. node_modules
+			var fileSource = GetFilesRecursivelyAsync( ".", cancellationToken );
+			var sourceCodeFiles = FilterByExtensionAsync( await fileSource.ConfigureAwait( false ), new HashSet<String> {
+				".cs", ".json", ".xml", ".List"
+			} );
+			(var counter, var errors) = await GetLineCountAsync( await sourceCodeFiles.ConfigureAwait( false ), cancellationToken ).ConfigureAwait( false );
+
+			// Distribute the file reading stage amongst several workers
+			// var (counter, errors) = CountLinesAndMerge(Split(sourceCodeFiles, 5));
+
+			var totalLines = 0;
+			await foreach ( (var file, var lines) in counter.ReadAllAsync( cancellationToken ) ) {
+				WriteLineWithTime( $"{file.FullName} {lines}" );
+				totalLines += lines;
+			}
+
+			WriteLine( $"Total lines: {totalLines}" );
+
+			await foreach ( var errMessage in errors.ReadAllAsync( cancellationToken ) ) {
+				WriteLine( errMessage );
+			}
+
+			sw.Stop();
+			WriteLine( sw.Elapsed.Simpler() );
+		}
+
+		public static async Task RunQuitChannel() {
+			var cts = new CancellationTokenSource();
+			var joe = await CreateMessenger( "Joe", 10, cts.Token ).ConfigureAwait( false );
+			cts.CancelAfter( TimeSpan.FromSeconds( 5 ) );
+
+			await foreach ( var item in joe.ReadAllAsync( cts.Token ) ) {
+				WriteLineWithTime( item );
+			}
+		}
+
+		public static async Task RunTimeout() {
+			var joe = await CreateMessenger( "Joe", 10 ).ConfigureAwait( false );
+			var cts = new CancellationTokenSource();
+			cts.CancelAfter( TimeSpan.FromSeconds( 5 ) );
+
+			try {
+				await foreach ( var item in joe.ReadAllAsync( cts.Token ) ) {
+					WriteLine( item );
+				}
+
+				WriteLine( "Joe sent all of his messages." );
+			}
+			catch ( OperationCanceledException ) {
+				WriteLine( "Joe, you are too slow!" );
+			}
+		}
+
+		public static async Task RunWebSearch() {
+			var ch = Channel.CreateUnbounded<String>();
+
+			async Task Search( String source, String terms, CancellationToken token ) {
+				await Task.Delay( TimeSpan.FromSeconds( Randem.Instance().Next( 5 ) ), token ).ConfigureAwait( false );
+				await ch.Writer.WriteAsync( $"Result from {source} for {terms}", token ).ConfigureAwait( false );
+			}
+
+			const String? term = "Jupyter";
+			var token = new CancellationTokenSource( TimeSpan.FromSeconds( 10 ) ).Token;
+
+			_ = Search( "Wikipedia", term, token );
+
+			_ = Search( "Quora", term, token );
+
+			_ = Search( "Everything2", term, token );
+
+			try {
+				for ( var i = 0; i < 3; i++ ) {
+					WriteLine( await ch.Reader.ReadAsync( token ).ConfigureAwait( false ) );
+				}
+
+				WriteLine( "All searches have completed." );
+			}
+			catch ( OperationCanceledException ) {
+				WriteLine( "Timeout." );
+			}
+
+			ch.Writer.Complete();
+		}
+
+	}
+
+	public static class TimeExtensions {
+		/// <summary>
+		///     Display a <see cref="TimeSpan" /> in simpler terms. ie "2 hours 4 minutes 33 seconds".
+		/// </summary>
+		/// <param name="timeSpan"></param>
+		public static String Simpler( this TimeSpan timeSpan ) {
+			var sb = new StringBuilder();
+
+			if ( timeSpan.Days > 365 * 2 ) {
+				sb.AppendFormat( " {0:n0} years", timeSpan.Days / 365 );
+			}
+
+			else if ( timeSpan.Days is >= 365 and <= 366 ) {
+				sb.Append( " 1 year" );
+			}
+
+			switch ( timeSpan.Days ) {
+				//else if ( timeSpan.Days > 14 ) {
+				//    sb.AppendFormat( " {0:n0} weeks", timeSpan.Days / 7 );
+				//}
+				//else if ( timeSpan.Days > 7 ) {
+				//    sb.AppendFormat( " {0} week", timeSpan.Days / 7 );
+				//}
+				//else
+				case > 1:
+					sb.Append( $" {timeSpan.Days:R} days" );
+					break;
+				case 1:
+					sb.Append( $" {timeSpan.Days:R} day" );
+					break;
+			}
+
+			switch ( timeSpan.Hours ) {
+				case > 1:
+					sb.Append( $" {timeSpan.Hours:n0} hours" );
+					break;
+				case 1:
+					sb.Append( $" {timeSpan.Hours} hour" );
+					break;
+			}
+
+			switch ( timeSpan.Minutes ) {
+				case > 1:
+					sb.Append( $" {timeSpan.Minutes:n0} minutes" );
+					break;
+				case 1:
+					sb.Append( $" {timeSpan.Minutes} minute" );
+					break;
+			}
+
+			switch ( timeSpan.Seconds ) {
+				case > 1:
+					sb.Append( $" {timeSpan.Seconds:n0} seconds" );
+					break;
+				case 1:
+					sb.Append( $" {timeSpan.Seconds} second" );
+					break;
+			}
+
+			switch ( timeSpan.Milliseconds ) {
+				case > 1:
+					sb.Append( $" {timeSpan.Milliseconds:n0} milliseconds" );
+					break;
+				case 1:
+					sb.Append( $" {timeSpan.Milliseconds} millisecond" );
+					break;
+			}
+
+			if ( String.IsNullOrEmpty( sb.ToString().Trim() ) ) {
+				sb.Append( " 0 milliseconds " );
+			}
+
+			return sb.ToString().Trim();
+		}
+	}
+
 }
